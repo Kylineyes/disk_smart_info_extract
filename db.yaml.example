@@ -1,0 +1,10 @@
+# Copy this file to db.yaml and provide the local password.
+# Never commit db.yaml because it contains database credentials.
+type: postgres
+host: 192.168.31.133
+port: 31000
+user: rikideng
+password: "CHANGE_ME"
+database: data_collection
+table: smart_log
+# sslmode: require
