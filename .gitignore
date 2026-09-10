@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Local database configuration; this file contains credentials.
+db.yaml
+
 # Editor/IDE
 # .idea/
 # .vscode/
