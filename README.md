@@ -4,7 +4,7 @@
 
 项目面向周期性采集场景，例如通过 cron 或 systemd 定期执行 `smartctl --all /dev/nvme0`，然后将每次采集的健康快照导入 PostgreSQL，供后续查询、告警和趋势分析使用。
 
-> 当前工程已完成基础结构、领域数据模型、配置模板和依赖准备；SMART 解析、命令行编排、数据库写入等功能正在开发中，当前版本尚不能实际导入数据。
+> 当前版本已支持 NVMe SMART 日志解析、PostgreSQL 幂等写入和命令行导入；不支持 ATA/SATA SMART 属性表。
 
 ## 当前支持范围
 
@@ -52,7 +52,7 @@ table: <table>
 
 ## 使用方式
 
-功能完成后，程序的调用方式如下：
+程序调用方式如下：
 
 ```sh
 go run ./cmd/smart-log-importer \
