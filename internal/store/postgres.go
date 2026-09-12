@@ -47,7 +47,14 @@ func openPostgres(ctx context.Context, cfg config.DBConfig, logger *slog.Logger)
 	// Build a keyword/value connection string so pgx applies its defaults and
 	// preserves sslmode exactly when the caller supplied one. Values are quoted
 	// by pgx's parser and never included in application logs or returned errors.
-	connString := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s", quoteConnectionValue(cfg.Host), cfg.Port, quoteConnectionValue(cfg.User), quoteConnectionValue(cfg.Password), quoteConnectionValue(cfg.Database))
+	connString := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s",
+		quoteConnectionValue(cfg.Host),
+		cfg.Port,
+		quoteConnectionValue(cfg.User),
+		quoteConnectionValue(cfg.Password),
+		quoteConnectionValue(cfg.Database),
+	)
 	if cfg.SSLMode != "" {
 		connString += " sslmode=" + quoteConnectionValue(cfg.SSLMode)
 	}
@@ -90,7 +97,12 @@ func (s *postgresStore) Initialize(ctx context.Context) error {
 		s.logger.Error("PostgreSQL index initialization failed", "component", storeComponent, "table", s.table, "error", err)
 		return fmt.Errorf("create PostgreSQL index: %w", err)
 	}
-	s.logger.Info("PostgreSQL schema initialized", "component", storeComponent, "table", s.table, "duration", time.Since(started))
+	s.logger.Info(
+		"PostgreSQL schema initialized",
+		"component", storeComponent,
+		"table", s.table,
+		"duration", time.Since(started),
+	)
 	return nil
 }
 
@@ -148,25 +160,15 @@ func validateSmartLog(log model.SmartLog) error {
 	if strings.TrimSpace(log.Health.OverallHealth) == "" {
 		return errors.New("SMART overall health is required")
 	}
-	if strings.TrimSpace(log.SourceFile) == "" {
-		return errors.New("SMART source file is required")
-	}
-	if log.RawLog == "" {
-		return errors.New("SMART raw log is required")
-	}
 	return nil
 }
 
 func postgresUpsertArguments(log model.SmartLog) []any {
 	return []any{
 		log.SnapshotDate,
-		log.SourceFile,
-		nullIfEmpty(log.LocalTimeRaw),
-		nullIfEmpty(log.SmartctlVersion),
 		log.Device.Model,
 		log.Device.Serial,
 		nullIfEmpty(log.Device.FirmwareVersion),
-		nullIfEmpty(log.Device.PCIVendorSubsystemID),
 		nullIfEmpty(log.Device.IEEOUIIdentifier),
 		bigIntString(log.Device.TotalNVMCapacityBytes),
 		nullIfEmpty(log.Device.NVMVersion),
@@ -196,58 +198,50 @@ func postgresUpsertArguments(log model.SmartLog) []any {
 		intPtrValue(log.Health.TemperatureSensor2C),
 		bigIntString(log.Health.ThermalTemp1TransitionCount),
 		bigIntString(log.Health.ThermalTemp1TotalTime),
-		log.Health.NoErrorsLogged,
-		log.RawLog,
 	}
 }
 
 func postgresCreateTableSQL(table string) string {
 	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    snapshot_date DATE NOT NULL,
-    source_file TEXT NOT NULL,
-    local_time_raw TEXT,
-    smartctl_version TEXT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, -- Database-generated snapshot identifier.
+    snapshot_date DATE NOT NULL, -- Calendar date represented by this SMART snapshot.
 
-    model VARCHAR(512) NOT NULL,
-    serial VARCHAR(255) NOT NULL,
-    firmware_version TEXT,
-    pci_vendor_subsystem_id TEXT,
-    ieee_oui_identifier TEXT,
-    total_nvm_capacity_bytes NUMERIC(39, 0),
-    nvm_version TEXT,
-    namespace_count INTEGER,
-    namespace_capacity_bytes NUMERIC(39, 0),
-    formatted_lba_bytes INTEGER,
-    namespace_eui64 TEXT,
+    model VARCHAR(512) NOT NULL, -- NVMe Model Number.
+    serial VARCHAR(255) NOT NULL, -- NVMe Serial Number.
+    firmware_version TEXT, -- NVMe Firmware Version.
+    ieee_oui_identifier TEXT, -- IEEE OUI identifier for the controller vendor.
+    total_nvm_capacity_bytes NUMERIC(39, 0), -- Total NVM capacity in bytes.
+    nvm_version TEXT, -- NVMe specification version.
+    namespace_count INTEGER, -- Number of namespaces reported by the controller.
+    namespace_capacity_bytes NUMERIC(39, 0), -- Namespace 1 capacity in bytes.
+    formatted_lba_bytes INTEGER, -- Namespace 1 formatted logical block size in bytes.
+    namespace_eui64 TEXT, -- Namespace 1 IEEE EUI-64 identifier.
 
-    overall_health TEXT NOT NULL,
-    critical_warning TEXT,
-    temperature_c SMALLINT,
-    available_spare_percent SMALLINT,
-    available_spare_threshold_percent SMALLINT,
-    percentage_used SMALLINT,
-    data_units_read NUMERIC(39, 0),
-    data_units_written NUMERIC(39, 0),
-    host_read_commands NUMERIC(39, 0),
-    host_write_commands NUMERIC(39, 0),
-    controller_busy_time_minutes NUMERIC(39, 0),
-    power_cycles NUMERIC(39, 0),
-    power_on_hours NUMERIC(39, 0),
-    unsafe_shutdowns NUMERIC(39, 0),
-    media_data_integrity_errors NUMERIC(39, 0),
-    error_information_log_entries NUMERIC(39, 0),
-    warning_composite_temp_time NUMERIC(39, 0),
-    critical_composite_temp_time NUMERIC(39, 0),
-    temperature_sensor_1_c SMALLINT,
-    temperature_sensor_2_c SMALLINT,
-    thermal_temp_1_transition_count NUMERIC(39, 0),
-    thermal_temp_1_total_time NUMERIC(39, 0),
-    no_errors_logged BOOLEAN NOT NULL DEFAULT FALSE,
+    overall_health TEXT NOT NULL, -- SMART overall-health self-assessment result.
+    critical_warning TEXT, -- NVMe Critical Warning bitmask as reported.
+    temperature_c SMALLINT, -- Composite temperature in degrees Celsius.
+    available_spare_percent SMALLINT, -- Percentage of remaining available spare.
+    available_spare_threshold_percent SMALLINT, -- Available-spare warning threshold percentage.
+    percentage_used SMALLINT, -- Estimated device lifetime percentage used.
+    data_units_read NUMERIC(39, 0), -- Cumulative NVMe data units read (512,000 bytes each).
+    data_units_written NUMERIC(39, 0), -- Cumulative NVMe data units written (512,000 bytes each).
+    host_read_commands NUMERIC(39, 0), -- Cumulative host read command count.
+    host_write_commands NUMERIC(39, 0), -- Cumulative host write command count.
+    controller_busy_time_minutes NUMERIC(39, 0), -- Cumulative controller busy time in minutes.
+    power_cycles NUMERIC(39, 0), -- Cumulative power-cycle count.
+    power_on_hours NUMERIC(39, 0), -- Cumulative power-on time in hours.
+    unsafe_shutdowns NUMERIC(39, 0), -- Cumulative unsafe shutdown count.
+    media_data_integrity_errors NUMERIC(39, 0), -- Cumulative media/data integrity error count.
+    error_information_log_entries NUMERIC(39, 0), -- Cumulative error-information log entry count.
+    warning_composite_temp_time NUMERIC(39, 0), -- Time in the warning composite-temperature range (controller units).
+    critical_composite_temp_time NUMERIC(39, 0), -- Time in the critical composite-temperature range (controller units).
+    temperature_sensor_1_c SMALLINT, -- Temperature sensor 1 reading in degrees Celsius.
+    temperature_sensor_2_c SMALLINT, -- Temperature sensor 2 reading in degrees Celsius.
+    thermal_temp_1_transition_count NUMERIC(39, 0), -- Cumulative transitions into thermal-temperature threshold 1.
+    thermal_temp_1_total_time NUMERIC(39, 0), -- Cumulative time at thermal-temperature threshold 1 (controller units).
 
-    raw_log TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, -- Time this row was first inserted.
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP -- Time this row was last updated.
 )`, table)
 }
 
@@ -270,30 +264,24 @@ func postgresCreateIndexSQL(table, tableName string) string {
 
 func postgresUpsertSQL(table string) string {
 	return fmt.Sprintf(`INSERT INTO %s (
-    snapshot_date, source_file, local_time_raw, smartctl_version,
-    model, serial, firmware_version, pci_vendor_subsystem_id,
-    ieee_oui_identifier, total_nvm_capacity_bytes, nvm_version,
-    namespace_count, namespace_capacity_bytes, formatted_lba_bytes,
-    namespace_eui64, overall_health, critical_warning, temperature_c,
-    available_spare_percent, available_spare_threshold_percent, percentage_used,
-    data_units_read, data_units_written, host_read_commands, host_write_commands,
+    snapshot_date, model, serial, firmware_version, ieee_oui_identifier,
+    total_nvm_capacity_bytes, nvm_version, namespace_count,
+    namespace_capacity_bytes, formatted_lba_bytes, namespace_eui64,
+    overall_health, critical_warning, temperature_c, available_spare_percent,
+    available_spare_threshold_percent, percentage_used, data_units_read,
+    data_units_written, host_read_commands, host_write_commands,
     controller_busy_time_minutes, power_cycles, power_on_hours, unsafe_shutdowns,
     media_data_integrity_errors, error_information_log_entries,
     warning_composite_temp_time, critical_composite_temp_time,
     temperature_sensor_1_c, temperature_sensor_2_c,
-    thermal_temp_1_transition_count, thermal_temp_1_total_time,
-    no_errors_logged, raw_log
+    thermal_temp_1_transition_count, thermal_temp_1_total_time
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-    $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
+    $30, $31, $32, $33
 )
 ON CONFLICT (snapshot_date, model, serial) DO UPDATE SET
-    source_file = EXCLUDED.source_file,
-    local_time_raw = EXCLUDED.local_time_raw,
-    smartctl_version = EXCLUDED.smartctl_version,
     firmware_version = EXCLUDED.firmware_version,
-    pci_vendor_subsystem_id = EXCLUDED.pci_vendor_subsystem_id,
     ieee_oui_identifier = EXCLUDED.ieee_oui_identifier,
     total_nvm_capacity_bytes = EXCLUDED.total_nvm_capacity_bytes,
     nvm_version = EXCLUDED.nvm_version,
@@ -323,8 +311,6 @@ ON CONFLICT (snapshot_date, model, serial) DO UPDATE SET
     temperature_sensor_2_c = EXCLUDED.temperature_sensor_2_c,
     thermal_temp_1_transition_count = EXCLUDED.thermal_temp_1_transition_count,
     thermal_temp_1_total_time = EXCLUDED.thermal_temp_1_total_time,
-    no_errors_logged = EXCLUDED.no_errors_logged,
-    raw_log = EXCLUDED.raw_log,
     updated_at = CURRENT_TIMESTAMP`, table)
 }
 

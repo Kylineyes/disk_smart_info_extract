@@ -98,5 +98,13 @@ func IsSimpleIdentifier(name string) bool {
 
 // String returns a non-sensitive summary of the configuration.
 func (cfg DBConfig) String() string {
-	return fmt.Sprintf("type=%s host=%s port=%d database=%s table=%s sslmode=%s", cfg.Type, cfg.Host, cfg.Port, cfg.Database, cfg.Table, cfg.SSLMode)
+	return fmt.Sprintf(
+		"type=%s host=%s port=%d database=%s table=%s sslmode=%s",
+		cfg.Type,
+		cfg.Host,
+		cfg.Port,
+		cfg.Database,
+		cfg.Table,
+		cfg.SSLMode,
+	)
 }

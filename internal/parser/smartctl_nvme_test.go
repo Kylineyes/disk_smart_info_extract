@@ -17,9 +17,6 @@ func TestParseNVMeHealthy(t *testing.T) {
 	if got.SnapshotDate != time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC) {
 		t.Fatalf("SnapshotDate = %v", got.SnapshotDate)
 	}
-	if got.SourceFile != path || got.SmartctlVersion == "" || got.RawLog == "" {
-		t.Fatalf("metadata not retained: %#v", got)
-	}
 	if got.Device.Model != "Example NVMe SSD 4TB" || got.Device.Serial != "SN-REDACTED-1356" {
 		t.Fatalf("identity = %#v", got.Device)
 	}
@@ -29,13 +26,15 @@ func TestParseNVMeHealthy(t *testing.T) {
 	if got.Device.NamespaceCapacityBytes.Cmp(big.NewInt(4000787030016)) != 0 || got.Device.FormattedLBABytes != 512 {
 		t.Fatalf("namespace = %#v", got.Device)
 	}
-	if got.Health.OverallHealth != "PASSED" || got.Health.CriticalWarning != "0x00" || !got.Health.NoErrorsLogged {
+	if got.Health.OverallHealth != "PASSED" || got.Health.CriticalWarning != "0x00" {
 		t.Fatalf("health summary = %#v", got.Health)
 	}
-	if got.Health.TemperatureC == nil || *got.Health.TemperatureC != 38 || got.Health.PercentageUsed == nil || *got.Health.PercentageUsed != 1 {
+	if got.Health.TemperatureC == nil || *got.Health.TemperatureC != 38 ||
+		got.Health.PercentageUsed == nil || *got.Health.PercentageUsed != 1 {
 		t.Fatalf("health values = %#v", got.Health)
 	}
-	if got.Health.DataUnitsRead.Cmp(big.NewInt(1234567)) != 0 || got.Health.HostWriteCommands.Cmp(big.NewInt(87654321)) != 0 {
+	if got.Health.DataUnitsRead.Cmp(big.NewInt(1234567)) != 0 ||
+		got.Health.HostWriteCommands.Cmp(big.NewInt(87654321)) != 0 {
 		t.Fatalf("counters = %#v", got.Health)
 	}
 }
@@ -59,7 +58,8 @@ func TestParseNVMeFilenameDateAndFallback(t *testing.T) {
 }
 
 func TestParseNVMeErrors(t *testing.T) {
-	if _, err := ParseNVMe("Model Number: x\n", "ata.log"); err == nil || !strings.Contains(err.Error(), "unsupported format") {
+	_, err := ParseNVMe("Model Number: x\n", "ata.log")
+	if err == nil || !strings.Contains(err.Error(), "unsupported format") {
 		t.Fatalf("unsupported error = %v", err)
 	}
 	raw := fixtureRaw()

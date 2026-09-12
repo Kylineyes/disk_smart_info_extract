@@ -111,10 +111,24 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 		if st != nil {
 			st.Close()
 		}
-		return importFailure(logger, filePath, started, fmt.Errorf("open database store: %w", err), cfg.Password, smartLog.Device.Serial)
+		return importFailure(
+			logger,
+			filePath,
+			started,
+			fmt.Errorf("open database store: %w", err),
+			cfg.Password,
+			smartLog.Device.Serial,
+		)
 	}
 	if st == nil {
-		return importFailure(logger, filePath, started, errors.New("open database store: returned a nil store"), cfg.Password, smartLog.Device.Serial)
+		return importFailure(
+			logger,
+			filePath,
+			started,
+			errors.New("open database store: returned a nil store"),
+			cfg.Password,
+			smartLog.Device.Serial,
+		)
 	}
 	defer st.Close()
 	logger.Info("database connected",
@@ -126,7 +140,14 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	err = st.Initialize(initializeCtx)
 	cancel()
 	if err != nil {
-		return importFailure(logger, filePath, started, fmt.Errorf("initialize database: %w", err), cfg.Password, smartLog.Device.Serial)
+		return importFailure(
+			logger,
+			filePath,
+			started,
+			fmt.Errorf("initialize database: %w", err),
+			cfg.Password,
+			smartLog.Device.Serial,
+		)
 	}
 	logger.Info("database initialized",
 		"component", "store",
@@ -137,7 +158,14 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	err = st.Upsert(upsertCtx, smartLog)
 	cancel()
 	if err != nil {
-		return importFailure(logger, filePath, started, fmt.Errorf("upsert smart log: %w", err), cfg.Password, smartLog.Device.Serial)
+		return importFailure(
+			logger,
+			filePath,
+			started,
+			fmt.Errorf("upsert smart log: %w", err),
+			cfg.Password,
+			smartLog.Device.Serial,
+		)
 	}
 	logger.Info("smart log upserted",
 		"component", "store",
@@ -191,7 +219,10 @@ func writeUsageError(stderr io.Writer, err error) {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	fmt.Fprintln(stderr, "usage: smart-log-importer -c <db.yaml> -f <smartctl-log> [-log-level debug|info|warn|error] [-log-format text|json]")
+	fmt.Fprintln(stderr,
+		"usage: smart-log-importer -c <db.yaml> -f <smartctl-log> "+
+			"[-log-level debug|info|warn|error] [-log-format text|json]",
+	)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 	}
