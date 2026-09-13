@@ -25,9 +25,13 @@ const (
 var (
 	filenameDatePattern = regexp.MustCompile(`(?:^|[^0-9])([0-9]{8})(?:[^0-9]|$)`)
 	localNumericDate    = regexp.MustCompile(`\b([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})\b`)
-	localMonthDate      = regexp.MustCompile(`(?i)\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2})(?:,)?\s+([0-9]{4})\b`)
-	leadingInteger      = regexp.MustCompile(`^[+-]?[0-9][0-9,]*`)
-	validInteger        = regexp.MustCompile(`^[+-]?[0-9]+(?:,[0-9]{3})*$`)
+	localMonthDate      = regexp.MustCompile(
+		`(?i)\b(January|February|March|April|May|June|July|August|September|` +
+			`October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)` +
+			`\s+([0-9]{1,2})(?:,)?\s+([0-9]{4})\b`,
+	)
+	leadingInteger = regexp.MustCompile(`^[+-]?[0-9][0-9,]*`)
+	validInteger   = regexp.MustCompile(`^[+-]?[0-9]+(?:,[0-9]{3})*$`)
 )
 
 // ParseNVMeFile reads a smartctl report from path and parses it.
@@ -44,10 +48,7 @@ func ParseNVMeFile(path string) (model.SmartLog, error) {
 // The parser intentionally uses labels rather than line positions. Unknown
 // labels are ignored so reports from newer smartctl versions remain usable.
 func ParseNVMe(rawLog string, sourceFile string) (model.SmartLog, error) {
-	result := model.SmartLog{
-		SourceFile: sourceFile,
-		RawLog:     rawLog,
-	}
+	var result model.SmartLog
 
 	fields := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(rawLog))
@@ -59,16 +60,6 @@ func ParseNVMe(rawLog string, sourceFile string) (model.SmartLog, error) {
 		if strings.Contains(trimmed, nvmeHealthMarker) {
 			markerFound = true
 		}
-		if trimmed == "No Errors Logged" {
-			result.Health.NoErrorsLogged = true
-		}
-		if result.SmartctlVersion == "" {
-			candidate := strings.TrimSpace(line)
-			if strings.HasPrefix(strings.ToLower(candidate), "smartctl ") {
-				result.SmartctlVersion = candidate
-			}
-		}
-
 		colon := strings.IndexByte(line, ':')
 		if colon < 0 {
 			continue
@@ -87,7 +78,11 @@ func ParseNVMe(rawLog string, sourceFile string) (model.SmartLog, error) {
 		return model.SmartLog{}, fmt.Errorf("scan smartctl log %q: %w", sourceName(sourceFile), err)
 	}
 	if !markerFound {
-		return model.SmartLog{}, fmt.Errorf("unsupported format %q: %s marker not found", sourceName(sourceFile), nvmeHealthMarker)
+		return model.SmartLog{}, fmt.Errorf(
+			"unsupported format %q: %s marker not found",
+			sourceName(sourceFile),
+			nvmeHealthMarker,
+		)
 	}
 
 	if result.Device.Model, _ = requiredString(fields, "model number"); result.Device.Model == "" {
@@ -96,19 +91,20 @@ func ParseNVMe(rawLog string, sourceFile string) (model.SmartLog, error) {
 	if result.Device.Serial, _ = requiredString(fields, "serial number"); result.Device.Serial == "" {
 		return model.SmartLog{}, missingFieldError(sourceFile, "Serial Number")
 	}
-	if result.Health.OverallHealth, _ = requiredString(fields, "smart overall-health self-assessment test result"); result.Health.OverallHealth == "" {
+	if result.Health.OverallHealth, _ = requiredString(
+		fields,
+		"smart overall-health self-assessment test result",
+	); result.Health.OverallHealth == "" {
 		return model.SmartLog{}, missingFieldError(sourceFile, "SMART overall-health self-assessment test result")
 	}
 
-	result.LocalTimeRaw = fields["local time is"]
 	var err error
-	result.SnapshotDate, err = snapshotDate(sourceFile, result.LocalTimeRaw)
+	result.SnapshotDate, err = snapshotDate(sourceFile, fields["local time is"])
 	if err != nil {
 		return model.SmartLog{}, err
 	}
 
 	result.Device.FirmwareVersion = fields["firmware version"]
-	result.Device.PCIVendorSubsystemID = fields["pci vendor/subsystem id"]
 	result.Device.IEEOUIIdentifier = fields["ieee oui identifier"]
 	result.Device.NVMVersion = fields["nvme version"]
 	result.Device.NamespaceEUI64 = fields["namespace 1 ieee eui-64"]
@@ -222,7 +218,19 @@ func normalizeLabel(label string) string {
 
 func isKnownLabel(label string) bool {
 	switch label {
-	case "model number", "serial number", "firmware version", "pci vendor/subsystem id", "ieee oui identifier", "total nvm capacity", "nvme version", "number of namespaces", "namespace 1 size/capacity", "namespace 1 formatted lba size", "namespace 1 ieee eui-64", "local time is", "smart overall-health self-assessment test result", "critical warning", "temperature", "available spare", "available spare threshold", "percentage used", "data units read", "data units written", "host read commands", "host write commands", "controller busy time", "power cycles", "power on hours", "unsafe shutdowns", "media and data integrity errors", "error information log entries", "warning comp. temperature time", "critical comp. temperature time", "temperature sensor 1", "temperature sensor 2", "thermal temp. 1 transition count", "thermal temp. 1 total time":
+	case "model number", "serial number", "firmware version", "ieee oui identifier",
+		"total nvm capacity", "nvme version", "number of namespaces",
+		"namespace 1 size/capacity", "namespace 1 formatted lba size",
+		"namespace 1 ieee eui-64", "local time is",
+		"smart overall-health self-assessment test result", "critical warning",
+		"temperature", "available spare", "available spare threshold",
+		"percentage used", "data units read", "data units written",
+		"host read commands", "host write commands", "controller busy time",
+		"power cycles", "power on hours", "unsafe shutdowns",
+		"media and data integrity errors", "error information log entries",
+		"warning comp. temperature time", "critical comp. temperature time",
+		"temperature sensor 1", "temperature sensor 2",
+		"thermal temp. 1 transition count", "thermal temp. 1 total time":
 		return true
 	default:
 		return false
@@ -307,7 +315,10 @@ func snapshotDate(sourceFile, localTimeRaw string) (time.Time, error) {
 			return date, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("missing or invalid snapshot date in %q (filename date and Local Time is unavailable)", sourceName(sourceFile))
+	return time.Time{}, fmt.Errorf(
+		"missing or invalid snapshot date in %q (filename date and Local Time is unavailable)",
+		sourceName(sourceFile),
+	)
 }
 
 func parseLocalDate(value string) (time.Time, bool) {

@@ -8,14 +8,10 @@ import (
 
 // SmartLog is one parsed NVMe SMART snapshot.
 type SmartLog struct {
-	ID              int64
-	SnapshotDate    time.Time
-	SourceFile      string
-	LocalTimeRaw    string
-	SmartctlVersion string
-	Device          DeviceInfo
-	Health          HealthInfo
-	RawLog          string
+	ID           int64
+	SnapshotDate time.Time
+	Device       DeviceInfo
+	Health       HealthInfo
 }
 
 // DeviceInfo contains stable NVMe identity and namespace fields.
@@ -23,7 +19,6 @@ type DeviceInfo struct {
 	Model                  string
 	Serial                 string
 	FirmwareVersion        string
-	PCIVendorSubsystemID   string
 	IEEOUIIdentifier       string
 	TotalNVMCapacityBytes  *big.Int
 	NVMVersion             string
@@ -57,5 +52,4 @@ type HealthInfo struct {
 	TemperatureSensor2C            *int
 	ThermalTemp1TransitionCount    *big.Int
 	ThermalTemp1TotalTime          *big.Int
-	NoErrorsLogged                 bool
 }
