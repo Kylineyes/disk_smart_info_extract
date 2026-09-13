@@ -12,6 +12,7 @@ type SmartLog struct {
 	SnapshotDate time.Time
 	Device       DeviceInfo
 	Health       HealthInfo
+	RawLog       string
 }
 
 // DeviceInfo contains stable NVMe identity and namespace fields.

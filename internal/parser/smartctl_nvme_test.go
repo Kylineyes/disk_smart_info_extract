@@ -39,6 +39,17 @@ func TestParseNVMeHealthy(t *testing.T) {
 	}
 }
 
+func TestParseNVMePreservesRawLog(t *testing.T) {
+	raw := fixtureRaw()
+	got, err := ParseNVMe(raw, "/dev/nvme0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RawLog != raw {
+		t.Fatalf("RawLog = %q, want original input", got.RawLog)
+	}
+}
+
 func TestParseNVMeFilenameDateAndFallback(t *testing.T) {
 	raw := fixtureRaw()
 	got, err := ParseNVMe(raw, "/tmp/report-20260831.any")

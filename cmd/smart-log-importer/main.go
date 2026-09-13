@@ -16,6 +16,7 @@ import (
 	"smart-log-importer/internal/config"
 	"smart-log-importer/internal/model"
 	"smart-log-importer/internal/parser"
+	"smart-log-importer/internal/smartctl"
 	"smart-log-importer/internal/store"
 )
 
@@ -24,7 +25,25 @@ const operationTimeout = 30 * time.Second
 type importerDeps struct {
 	loadDBConfig  func(string) (config.DBConfig, error)
 	parseNVMeFile func(string) (model.SmartLog, error)
+	parseNVMe     func(string, string) (model.SmartLog, error)
+	runSmartctl   func(context.Context, string) (string, error)
 	openStore     func(context.Context, config.DBConfig, *slog.Logger) (store.Store, error)
+}
+
+type importSource struct {
+	filePath   string
+	devicePath string
+}
+
+func (source importSource) logAttrs() []any {
+	if source.devicePath != "" {
+		return []any{"device", source.devicePath}
+	}
+	return []any{"file", source.filePath}
+}
+
+func eventAttrs(source importSource, attrs ...any) []any {
+	return append(append([]any(nil), attrs...), source.logAttrs()...)
 }
 
 func main() {
@@ -40,6 +59,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return runWithDeps(args, stdout, stderr, importerDeps{
 		loadDBConfig:  config.LoadDBConfig,
 		parseNVMeFile: parser.ParseNVMeFile,
+		parseNVMe:     parser.ParseNVMe,
+		runSmartctl:   smartctl.Run,
 		openStore:     store.Open,
 	})
 }
@@ -55,10 +76,11 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 		stderr = os.Stderr
 	}
 
-	configPath, filePath, level, format, err := parseFlags(args, stderr)
+	configPath, filePath, devicePath, level, format, err := parseFlags(args, stderr)
 	if err != nil {
 		return err
 	}
+	source := importSource{filePath: filePath, devicePath: devicePath}
 
 	logger, err := applog.New(stderr, level, format)
 	if err != nil {
@@ -67,42 +89,55 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	}
 
 	started := time.Now()
-	logger.Info("import started",
-		"component", "import",
-		"file", filePath,
-	)
+	logger.Info("import started", eventAttrs(source, "component", "import")...)
 	defer func() {
-		logger.Info("import finished",
+		logger.Info("import finished", eventAttrs(
+			source,
 			"component", "import",
-			"file", filePath,
 			"duration", time.Since(started).String(),
-		)
+		)...)
 	}()
 
-	if deps.loadDBConfig == nil || deps.parseNVMeFile == nil || deps.openStore == nil {
+	if deps.loadDBConfig == nil || deps.openStore == nil ||
+		(source.filePath != "" && deps.parseNVMeFile == nil) ||
+		(source.devicePath != "" && (deps.parseNVMe == nil || deps.runSmartctl == nil)) {
 		return errors.New("import dependencies are not configured")
 	}
 
 	cfg, err := deps.loadDBConfig(configPath)
 	if err != nil {
-		return importFailure(logger, filePath, started, fmt.Errorf("load database config: %w", err))
+		return importFailure(logger, source, started, fmt.Errorf("load database config: %w", err))
 	}
-	logger.Info("database config loaded",
-		"component", "config",
-		"table", cfg.Table,
-	)
+	logger.Info("database config loaded", eventAttrs(source, "component", "config", "table", cfg.Table)...)
 
-	smartLog, err := deps.parseNVMeFile(filePath)
-	if err != nil {
-		return importFailure(logger, filePath, started, fmt.Errorf("parse smart log: %w", err))
+	var smartLog model.SmartLog
+	if source.devicePath != "" {
+		collectCtx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+		rawLog, collectErr := deps.runSmartctl(collectCtx, source.devicePath)
+		cancel()
+		if collectErr != nil {
+			return importFailure(
+				logger,
+				source,
+				started,
+				fmt.Errorf("collect smart log: %w", collectErr),
+				cfg.Password,
+			)
+		}
+		smartLog, err = deps.parseNVMe(rawLog, source.devicePath)
+	} else {
+		smartLog, err = deps.parseNVMeFile(source.filePath)
 	}
-	logger.Info("smart log parsed",
+	if err != nil {
+		return importFailure(logger, source, started, fmt.Errorf("parse smart log: %w", err))
+	}
+	logger.Info("smart log parsed", eventAttrs(
+		source,
 		"component", "parser",
-		"file", filePath,
 		"snapshot_date", smartLog.SnapshotDate.Format("2006-01-02"),
 		"model", smartLog.Device.Model,
 		"serial_suffix", applog.SerialSuffix(smartLog.Device.Serial),
-	)
+	)...)
 
 	connectCtx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	st, err := deps.openStore(connectCtx, cfg, logger)
@@ -113,7 +148,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 		}
 		return importFailure(
 			logger,
-			filePath,
+			source,
 			started,
 			fmt.Errorf("open database store: %w", err),
 			cfg.Password,
@@ -123,7 +158,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	if st == nil {
 		return importFailure(
 			logger,
-			filePath,
+			source,
 			started,
 			errors.New("open database store: returned a nil store"),
 			cfg.Password,
@@ -131,10 +166,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 		)
 	}
 	defer st.Close()
-	logger.Info("database connected",
-		"component", "store",
-		"table", cfg.Table,
-	)
+	logger.Info("database connected", eventAttrs(source, "component", "store", "table", cfg.Table)...)
 
 	initializeCtx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	err = st.Initialize(initializeCtx)
@@ -142,17 +174,14 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	if err != nil {
 		return importFailure(
 			logger,
-			filePath,
+			source,
 			started,
 			fmt.Errorf("initialize database: %w", err),
 			cfg.Password,
 			smartLog.Device.Serial,
 		)
 	}
-	logger.Info("database initialized",
-		"component", "store",
-		"table", cfg.Table,
-	)
+	logger.Info("database initialized", eventAttrs(source, "component", "store", "table", cfg.Table)...)
 
 	upsertCtx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	err = st.Upsert(upsertCtx, smartLog)
@@ -160,20 +189,21 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 	if err != nil {
 		return importFailure(
 			logger,
-			filePath,
+			source,
 			started,
 			fmt.Errorf("upsert smart log: %w", err),
 			cfg.Password,
 			smartLog.Device.Serial,
 		)
 	}
-	logger.Info("smart log upserted",
+	logger.Info("smart log upserted", eventAttrs(
+		source,
 		"component", "store",
 		"table", cfg.Table,
 		"snapshot_date", smartLog.SnapshotDate.Format("2006-01-02"),
 		"model", smartLog.Device.Model,
 		"serial_suffix", applog.SerialSuffix(smartLog.Device.Serial),
-	)
+	)...)
 
 	_, err = fmt.Fprintf(stdout,
 		"imported smart log: date=%s model=%q serial=%q\n",
@@ -181,65 +211,75 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps importerDeps) err
 		smartLog.Device.Model, "..."+applog.SerialSuffix(smartLog.Device.Serial),
 	)
 	if err != nil {
-		return importFailure(logger, filePath, started, fmt.Errorf("write success summary: %w", err))
+		return importFailure(logger, source, started, fmt.Errorf("write success summary: %w", err))
 	}
 	return nil
 }
 
-func parseFlags(args []string, stderr io.Writer) (configPath, filePath, level, format string, err error) {
+const usageText = "usage: smart-log-importer -c <db.yaml> (-f <smartctl-log> | -d <device>) " +
+	"[-log-level debug|info|warn|error] [-log-format text|json]"
+
+func parseFlags(args []string, stderr io.Writer) (configPath, filePath, devicePath, level, format string, err error) {
 	fs := flag.NewFlagSet("smart-log-importer", flag.ContinueOnError)
 	// We print a compact, stable usage message ourselves. The flag package's
 	// default diagnostics can otherwise be mixed into command output.
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&configPath, "c", "", "path to database YAML")
 	fs.StringVar(&filePath, "f", "", "path to smartctl log")
+	fs.StringVar(&devicePath, "d", "", "device path")
 	fs.StringVar(&level, "log-level", "info", "log level")
 	fs.StringVar(&format, "log-format", "text", "log format")
 	if parseErr := fs.Parse(args); parseErr != nil {
 		writeUsageError(stderr, parseErr)
-		return "", "", "", "", parseErr
+		return "", "", "", "", "", parseErr
 	}
 	if extras := fs.Args(); len(extras) != 0 {
 		parseErr := fmt.Errorf("unexpected argument %q", extras[0])
 		writeUsageError(stderr, parseErr)
-		return "", "", "", "", parseErr
+		return "", "", "", "", "", parseErr
 	}
+
+	var problems []string
 	if strings.TrimSpace(configPath) == "" {
-		err = errors.New("missing required -c database config path")
-	} else if strings.TrimSpace(filePath) == "" {
-		err = errors.New("missing required -f smartctl log path")
+		problems = append(problems, "missing required -c database config path")
 	}
-	if err != nil {
+	hasFile := strings.TrimSpace(filePath) != ""
+	hasDevice := strings.TrimSpace(devicePath) != ""
+	switch {
+	case hasFile && hasDevice:
+		problems = append(problems, "-f and -d cannot be used together; provide exactly one input")
+	case !hasFile && !hasDevice:
+		problems = append(problems, "exactly one of -f or -d is required")
+	}
+	if len(problems) != 0 {
+		err = errors.New(strings.Join(problems, "; "))
 		writeUsageError(stderr, err)
 	}
-	return configPath, filePath, level, format, err
+	return configPath, filePath, devicePath, level, format, err
 }
 
 func writeUsageError(stderr io.Writer, err error) {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	fmt.Fprintln(stderr,
-		"usage: smart-log-importer -c <db.yaml> -f <smartctl-log> "+
-			"[-log-level debug|info|warn|error] [-log-format text|json]",
-	)
+	fmt.Fprintln(stderr, usageText)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 	}
 }
 
-func importFailure(logger *slog.Logger, filePath string, started time.Time, err error, sensitive ...string) error {
+func importFailure(logger *slog.Logger, source importSource, started time.Time, err error, sensitive ...string) error {
 	logError := err.Error()
 	for _, value := range sensitive {
 		if value != "" {
 			logError = strings.ReplaceAll(logError, value, "[redacted]")
 		}
 	}
-	logger.Error("import failed",
+	logger.Error("import failed", eventAttrs(
+		source,
 		"component", "import",
-		"file", filePath,
 		"error", logError,
 		"duration", time.Since(started).String(),
-	)
+	)...)
 	return err
 }
