@@ -48,7 +48,7 @@ func ParseNVMeFile(path string) (model.SmartLog, error) {
 // The parser intentionally uses labels rather than line positions. Unknown
 // labels are ignored so reports from newer smartctl versions remain usable.
 func ParseNVMe(rawLog string, sourceFile string) (model.SmartLog, error) {
-	var result model.SmartLog
+	result := model.SmartLog{RawLog: rawLog}
 
 	fields := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(rawLog))

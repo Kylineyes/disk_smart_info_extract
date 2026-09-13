@@ -16,7 +16,7 @@
 - 累计读写数据单位、主机读写命令、控制器忙碌时间；
 - 通电次数、通电小时数、异常断电次数；
 - 介质/数据完整性错误、错误日志条目及温度传感器信息；
-- 原始 `smartctl` 文本，供审计和重新解析。
+- 原始 `smartctl` 文本，在当前解析结果的 `SmartLog.RawLog` 中保留；不写入 PostgreSQL；
 
 **不支持** ATA/SATA HDD/SSD 的 SMART 属性表。
 
@@ -54,18 +54,31 @@ table: <table>
 
 程序调用方式如下：
 
+文件模式：
+
 ```sh
 go run ./cmd/smart-log-importer \
   -c ./db.yaml \
   -f /path/to/19260817.log
 ```
 
+设备模式：
+
+```sh
+go run ./cmd/smart-log-importer \
+  -c ./db.yaml \
+  -d /dev/nvme1n1
+```
+
+`-f` 与 `-d` 必须且只能提供一个；两者同时提供或都未提供时，程序会向 `stderr` 输出用法和错误并立即退出，不会调用 `smartctl` 或访问数据库。设备模式会在内存中执行 `smartctl --all <device>` 并解析其标准输出，因此运行主机需要安装 `smartctl`，且当前用户需要具备读取目标设备的权限。
+
 参数说明：
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `-c` | 是 | 数据库 YAML 配置文件路径。 |
-| `-f` | 是 | 单个 `smartctl` NVMe 文本日志路径；扩展名不限。 |
+| `-f` | 与 `-d` 二选一 | 单个 `smartctl` NVMe 文本日志路径；扩展名不限。 |
+| `-d` | 与 `-f` 二选一 | NVMe 设备路径，例如 `/dev/nvme1n1`；程序会直接调用 `smartctl --all`。 |
 | `-log-level` | 否 | `debug`、`info`、`warn`、`error`；默认 `info`。 |
 | `-log-format` | 否 | `text` 或 `json`；默认 `text`。 |
 
