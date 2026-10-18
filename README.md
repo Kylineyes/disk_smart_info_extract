@@ -104,6 +104,19 @@ Go 源码统一采用 4 空格缩进，禁止 Tab，每行最多 120 个字符�
 
 `go test ./...` 包含格式与行宽检查、格式化脚本回归测试和数据库字段回归测试。标签发布流程同样执行只读格式检查、`go vet` 和竞态测试，通过后再构建 Linux amd64 可执行文件。
 
+### PostgreSQL 集成测试
+
+默认测试不连接数据库。显式提供隔离测试库的配置路径后，启用真实 PostgreSQL 集成测试：
+
+```sh
+SMART_IMPORTER_TEST_DB_CONFIG=/path/to/isolated-postgres.yaml \
+  go test -race -count=1 -v ./internal/store -run PostgresIntegration
+```
+
+配置格式与 `db.yaml` 相同，但必须指向允许创建及删除测试表的隔离数据库，不能使用业务库配置。测试忽略配置中的 `table`，为每个用例随机生成 `smart_import_it_` 前缀表；结束时仅删除该表，不清理业务数据，也不打印凭据。
+
+验证包括重复初始化、同一快照 UPSERT、不同日期新增、主键与时间戳、大计数器精度、可选字段 `NULL`、废弃列不存在，以及错误脱敏和错误链保留。`.github/workflows/test.yml` 在 PR 和 `main` / `init` 推送时启动临时 PostgreSQL 服务执行这些测试；发布流程保持独立。
+
 ## 项目结构
 
 ```text

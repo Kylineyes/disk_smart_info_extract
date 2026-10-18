@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - init
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: smart_importer_it
+          POSTGRES_DB: smart_importer_test
+          # Synthetic credentials belong only to this disposable CI service.
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U smart_importer_it -d smart_importer_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify with isolated PostgreSQL
+        env:
+          SMART_IMPORTER_TEST_DB_CONFIG: ${{ runner.temp }}/smart-importer-test.yaml
+          POSTGRES_TEST_PORT: ${{ job.services.postgres.ports[5432] }}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path(os.environ["SMART_IMPORTER_TEST_DB_CONFIG"])
+          path.write_text(
+              "type: postgres\n"
+              "host: 127.0.0.1\n"
+              f"port: {os.environ['POSTGRES_TEST_PORT']}\n"
+              "user: smart_importer_it\n"
+              "password: ci-only-password\n"
+              "database: smart_importer_test\n"
+              "table: ignored_by_integration_tests\n"
+              "sslmode: disable\n",
+              encoding="utf-8",
+          )
+          path.chmod(0o600)
+          PY
+          ./scripts/format-go.sh --check
+          go vet ./...
+          go test -race -count=1 ./...
+          git diff --check

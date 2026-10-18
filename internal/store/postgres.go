@@ -15,6 +15,7 @@ import (
     "unicode/utf8"
 
     "github.com/jackc/pgx/v5"
+    "github.com/jackc/pgx/v5/pgconn"
     "github.com/jackc/pgx/v5/pgxpool"
 
     "smart-log-importer/internal/config"
@@ -62,7 +63,7 @@ func openPostgres(ctx context.Context, cfg config.DBConfig, logger *slog.Logger)
     if err != nil {
         return nil, fmt.Errorf(
             "prepare PostgreSQL connection configuration: %w",
-            sanitizeConnectionError(err, cfg),
+            sanitizeDatabaseError(err),
         )
     }
 
@@ -70,14 +71,14 @@ func openPostgres(ctx context.Context, cfg config.DBConfig, logger *slog.Logger)
     if err != nil {
         return nil, fmt.Errorf(
             "open PostgreSQL connection pool: %w",
-            sanitizeConnectionError(err, cfg),
+            sanitizeDatabaseError(err),
         )
     }
     if err := pool.Ping(ctx); err != nil {
         pool.Close()
         return nil, fmt.Errorf(
             "ping PostgreSQL database: %w",
-            sanitizeConnectionError(err, cfg),
+            sanitizeDatabaseError(err),
         )
     }
 
@@ -103,22 +104,24 @@ func openPostgres(ctx context.Context, cfg config.DBConfig, logger *slog.Logger)
 func (s *postgresStore) Initialize(ctx context.Context) error {
     started := time.Now()
     if _, err := s.pool.Exec(ctx, s.ddl); err != nil {
+        safeError := sanitizeDatabaseError(err)
         s.logger.Error(
             "PostgreSQL schema initialization failed",
             "component", storeComponent,
             "table", s.table,
-            "error", err,
+            "error", safeError,
         )
-        return fmt.Errorf("create PostgreSQL table: %w", err)
+        return fmt.Errorf("create PostgreSQL table: %w", safeError)
     }
     if _, err := s.pool.Exec(ctx, s.indexDDL); err != nil {
+        safeError := sanitizeDatabaseError(err)
         s.logger.Error(
             "PostgreSQL index initialization failed",
             "component", storeComponent,
             "table", s.table,
-            "error", err,
+            "error", safeError,
         )
-        return fmt.Errorf("create PostgreSQL index: %w", err)
+        return fmt.Errorf("create PostgreSQL index: %w", safeError)
     }
     s.logger.Info(
         "PostgreSQL schema initialized",
@@ -140,13 +143,14 @@ func (s *postgresStore) Upsert(ctx context.Context, log model.SmartLog) error {
     started := time.Now()
     _, err := s.pool.Exec(ctx, s.upsertSQL, postgresUpsertArguments(log)...)
     if err != nil {
+        safeError := sanitizeDatabaseError(err)
         s.logger.Error(
             "postgres upsert failed",
             "component", storeComponent,
             "table", s.table,
-            "error", err,
+            "error", safeError,
         )
-        return fmt.Errorf("upsert PostgreSQL SMART snapshot: %w", err)
+        return fmt.Errorf("upsert PostgreSQL SMART snapshot: %w", safeError)
     }
     s.logger.Info(
         "PostgreSQL SMART snapshot upserted",
@@ -378,17 +382,39 @@ func serialSuffix(serial string) string {
     return string(runes[len(runes)-4:])
 }
 
-func sanitizeConnectionError(err error, cfg config.DBConfig) error {
+// Driver text can contain entire connection strings or rejected row values.
+// Render only a safe category, while retaining the original cause for callers.
+func sanitizeDatabaseError(err error) error {
     if err == nil {
         return nil
     }
-    message := err.Error()
-    for _, secret := range []string{cfg.Password, cfg.User, cfg.Host, cfg.Database} {
-        if secret != "" {
-            message = strings.ReplaceAll(message, secret, "[redacted]")
-        }
+    message := "PostgreSQL operation failed"
+    var pgError *pgconn.PgError
+    var parseError *pgconn.ParseConfigError
+    switch {
+    case errors.Is(err, context.Canceled):
+        message = context.Canceled.Error()
+    case errors.Is(err, context.DeadlineExceeded):
+        message = context.DeadlineExceeded.Error()
+    case errors.As(err, &pgError):
+        message = "PostgreSQL server error (SQLSTATE " + pgError.Code + ")"
+    case errors.As(err, &parseError):
+        message = "invalid PostgreSQL connection configuration"
     }
-    return errors.New(message)
+    return &sanitizedError{message: message, cause: err}
+}
+
+type sanitizedError struct {
+    message string
+    cause   error
+}
+
+func (err *sanitizedError) Error() string {
+    return err.message
+}
+
+func (err *sanitizedError) Unwrap() error {
+    return err.cause
 }
 
 func quoteConnectionValue(value string) string {
