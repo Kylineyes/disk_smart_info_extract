@@ -90,13 +90,19 @@ sudo smartctl --all /dev/nvme0 > "./nvme/$(date +%Y%m%d).log"
 
 ## 开发
 
-下载模块并检查工程：
+下载模块、统一格式并检查工程（格式化脚本需要 `python3` 和 Go 自带的 `gofmt`）：
 
 ```sh
 go mod download
-gofmt -w cmd internal
+./scripts/format-go.sh
+./scripts/format-go.sh --check
 go test ./...
+go vet ./...
 ```
+
+Go 源码统一采用 4 空格缩进，禁止 Tab，每行最多 120 个字符。脚本先运行 `gofmt`，再将 Tab 展开为 4 空格；超长行需手动拆分。`--check` 只检查、不改写文件，可从任意工作目录调用。
+
+`go test ./...` 包含格式与行宽检查、格式化脚本回归测试和数据库字段回归测试。标签发布流程同样执行只读格式检查、`go vet` 和竞态测试，通过后再构建 Linux amd64 可执行文件。
 
 ## 项目结构
 

@@ -24,8 +24,7 @@ jobs:
 
       - name: Verify
         run: |
-          gofmt -d cmd internal
-          test -z "$(gofmt -d cmd internal)"
+          ./scripts/format-go.sh --check
           go vet ./...
           go test -race -count=1 ./...
 
